@@ -4,7 +4,7 @@ set -e
 IMAGE_NAME="nexus-node:latest"
 BUILD_DIR="/root/nexus-docker"
 LOG_DIR="/var/log/nexus"
-MEMORY_LIMIT="4g"  # 默认内存限制为4GB
+MEMORY_LIMIT="12g"  # 默认内存限制为4GB
 
 function ensure_jq_installed() {
     if ! command -v jq &>/dev/null; then
