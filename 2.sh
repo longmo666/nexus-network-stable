@@ -4,6 +4,7 @@ set -e
 IMAGE_NAME="nexus-node:latest"
 BUILD_DIR="/root/nexus-docker"
 LOG_DIR="/var/log/nexus"
+DEFAULT_MEM_LIMIT="6g"  # 全局内存限制变量
 
 function ensure_jq_installed() {
     if ! command -v jq &>/dev/null; then
@@ -94,8 +95,8 @@ touch "$LOG_FILE" && chmod 644 "$LOG_FILE"
 echo "$NODE_ID" > "$PROVER_ID_FILE"
 echo "使用的 node-id: $NODE_ID"
 
-[ -n "$NEXUS_LOG"] && LOG_FILE="$NEXUS_LOG"
-[ -n "$SCREEN_NAME"] || SCREEN_NAME="nexus"
+[ -n "$NEXUS_LOG" ] && LOG_FILE="$NEXUS_LOG"
+[ -n "$SCREEN_NAME" ] || SCREEN_NAME="nexus"
 
 if ! command -v nexus-network &>/dev/null; then
     echo "nexus-network 未安装"
@@ -161,6 +162,10 @@ function start_instances() {
 
     init_log_dir || return 1
 
+    # 询问内存限制
+    read -rp "请输入每个容器内存限制(如6g/8g/空表示不限): " MEM_LIMIT
+    [[ -z "$MEM_LIMIT" ]] && MEM_LIMIT="no-limit" || MEM_LIMIT="$MEM_LIMIT"
+
     for i in $(seq 1 "$INSTANCE_COUNT"); do
         read -rp "请输入第 $i 个实例的 node-id: " NODE_ID
         [[ -z "$NODE_ID" ]] && echo "❌ node-id 不能为空" && continue
@@ -173,20 +178,35 @@ function start_instances() {
 
         prepare_log_file "$LOG_FILE" || continue
 
-        if ! docker run -d \
-            --name "$CONTAINER_NAME" \
-            -e NODE_ID="$NODE_ID" \
-            -e NEXUS_LOG="$LOG_FILE" \
-            -e SCREEN_NAME="$SCREEN_NAME" \
-            -v "$LOG_FILE":"$LOG_FILE" \
-            -v "$LOG_DIR":"$LOG_DIR" \
-            "$IMAGE_NAME"; then
+        # 构建docker启动命令
+        DOCKER_CMD="docker run -d --name $CONTAINER_NAME"
+        [ "$MEM_LIMIT" != "no-limit" ] && \
+            DOCKER_CMD+=" --memory $MEM_LIMIT --memory-swap $MEM_LIMIT --oom-kill-disable=false"
+        
+        DOCKER_CMD+=" -e NODE_ID='$NODE_ID'"
+        DOCKER_CMD+=" -e NEXUS_LOG='$LOG_FILE'"
+        DOCKER_CMD+=" -e SCREEN_NAME='$SCREEN_NAME'"
+        DOCKER_CMD+=" -v '$LOG_FILE:$LOG_FILE'"
+        DOCKER_CMD+=" -v '$LOG_DIR:$LOG_DIR'"
+        DOCKER_CMD+=" $IMAGE_NAME"
+
+        # 执行启动命令
+        if ! eval $DOCKER_CMD; then
             echo "❌ 启动容器 $CONTAINER_NAME 失败"
             continue
         fi
 
-        echo "✅ 启动成功：$CONTAINER_NAME"
-        echo "日志文件路径: $LOG_FILE"
+        # 状态诊断
+        echo "⌛ 等待容器启动(10秒)..."
+        sleep 10
+        if docker ps --filter "name=$CONTAINER_NAME" --format '{{.Status}}' | grep -q 'Up'; then
+            echo "✅ 容器状态: 运行正常"
+            docker inspect --format '{{json .HostConfig.Memory }}' "$CONTAINER_NAME" | \
+                jq -r 'if . == 0 then "内存限制: 无限制" else "内存限制: " + (.|tostring) + " bytes" end'
+        else
+            echo "⚠️ 容器状态异常! 执行诊断:"
+            docker logs --tail 20 $CONTAINER_NAME
+        fi
     done
 }
 
@@ -214,9 +234,17 @@ function restart_instance() {
 
     prepare_log_file "$LOG_FILE" || return 1
 
+    # 获取原内存限制设置
+    current_mem_limit=$(docker inspect --format '{{.HostConfig.Memory}}' "$CONTAINER_NAME")
+    MEM_FLAGS=""
+    if [ "$current_mem_limit" -gt 0 ]; then
+        MEM_FLAGS="--memory=${current_mem_limit} --memory-swap=${current_mem_limit} --oom-kill-disable=false"
+    fi
+
     docker rm -f "$CONTAINER_NAME" &>/dev/null
     if ! docker run -d \
         --name "$CONTAINER_NAME" \
+        $MEM_FLAGS \
         -e NODE_ID="$NODE_ID" \
         -e NEXUS_LOG="$LOG_FILE" \
         -e SCREEN_NAME="$SCREEN_NAME" \
@@ -228,6 +256,14 @@ function restart_instance() {
     fi
 
     echo "✅ 已重启：$CONTAINER_NAME"
+    echo "🔄 监控状态..."
+    sleep 10
+    if docker ps --filter "name=$CONTAINER_NAME" | grep -q 'Up'; then
+        echo "✅ 状态: 运行中"
+    else
+        echo "❌ 启动失败! 查看日志:"
+        docker logs --tail 20 $CONTAINER_NAME
+    fi
 }
 
 function change_node_id() {
@@ -241,9 +277,17 @@ function change_node_id() {
 
     prepare_log_file "$LOG_FILE" || return 1
 
+    # 获取原内存限制设置
+    current_mem_limit=$(docker inspect --format '{{.HostConfig.Memory}}' "$CONTAINER_NAME")
+    MEM_FLAGS=""
+    if [ "$current_mem_limit" -gt 0 ]; then
+        MEM_FLAGS="--memory=${current_mem_limit} --memory-swap=${current_mem_limit} --oom-kill-disable=false"
+    fi
+
     docker rm -f "$CONTAINER_NAME" &>/dev/null
     if ! docker run -d \
         --name "$CONTAINER_NAME" \
+        $MEM_FLAGS \
         -e NODE_ID="$NEW_ID" \
         -e NEXUS_LOG="$LOG_FILE" \
         -e SCREEN_NAME="$SCREEN_NAME" \
@@ -255,6 +299,14 @@ function change_node_id() {
     fi
 
     echo "✅ 实例 $CONTAINER_NAME 已使用新 ID 启动"
+    echo "🔄 监控状态..."
+    sleep 10
+    if docker ps --filter "name=$CONTAINER_NAME" | grep -q 'Up'; then
+        echo "✅ 状态: 运行中"
+    else
+        echo "❌ 启动失败! 查看日志:"
+        docker logs --tail 20 $CONTAINER_NAME
+    fi
 }
 
 function add_one_instance() {
@@ -270,23 +322,42 @@ function add_one_instance() {
     LOG_FILE="$LOG_DIR/nexus-$NEXT_NUM.log"
     SCREEN_NAME="nexus-$NEXT_NUM"
 
+    # 询问内存限制
+    read -rp "请输入内存限制(如6g/8g/空表示不限): " MEM_LIMIT
+    [[ -z "$MEM_LIMIT" ]] && MEM_LIMIT="no-limit" || MEM_LIMIT="$MEM_LIMIT"
+
     init_log_dir || return 1
     prepare_log_file "$LOG_FILE" || return 1
 
-    if ! docker run -d \
-        --name "$CONTAINER_NAME" \
-        -e NODE_ID="$NODE_ID" \
-        -e NEXUS_LOG="$LOG_FILE" \
-        -e SCREEN_NAME="$SCREEN_NAME" \
-        -v "$LOG_FILE":"$LOG_FILE" \
-        -v "$LOG_DIR":"$LOG_DIR" \
-        "$IMAGE_NAME"; then
+    # 构建docker启动命令
+    DOCKER_CMD="docker run -d --name $CONTAINER_NAME"
+    [ "$MEM_LIMIT" != "no-limit" ] && \
+        DOCKER_CMD+=" --memory $MEM_LIMIT --memory-swap $MEM_LIMIT --oom-kill-disable=false"
+    
+    DOCKER_CMD+=" -e NODE_ID='$NODE_ID'"
+    DOCKER_CMD+=" -e NEXUS_LOG='$LOG_FILE'"
+    DOCKER_CMD+=" -e SCREEN_NAME='$SCREEN_NAME'"
+    DOCKER_CMD+=" -v '$LOG_FILE:$LOG_FILE'"
+    DOCKER_CMD+=" -v '$LOG_DIR:$LOG_DIR'"
+    DOCKER_CMD+=" $IMAGE_NAME"
+
+    if ! eval $DOCKER_CMD; then
         echo "❌ 启动容器 $CONTAINER_NAME 失败"
         return 1
     fi
 
     echo "✅ 添加实例成功：$CONTAINER_NAME"
     echo "日志文件路径: $LOG_FILE"
+    
+    # 状态诊断
+    echo "⌛ 等待容器启动..."
+    sleep 10
+    if docker ps --filter "name=$CONTAINER_NAME" | grep -q 'Up'; then
+        echo "✅ 状态: 运行中"
+    else
+        echo "❌ 启动失败! 查看日志:"
+        docker logs --tail 20 $CONTAINER_NAME
+    fi
 }
 
 function view_logs() {
@@ -300,8 +371,22 @@ function show_running_ids() {
     echo "📋 当前正在运行的实例及 ID："
     docker ps --format '{{.Names}}' | grep '^nexus-node-' | while read -r name; do
         ID=$(docker exec "$name" bash -c 'cat /root/.nexus/node-id 2>/dev/null || echo "未获取到"')
-        echo "$name: $ID"
+        mem_usage=$(docker stats --no-stream --format "{{.MemUsage}}" "$name" | cut -d '/' -f1 | tr -d ' ')
+        mem_limit=$(docker inspect --format '{{.HostConfig.Memory}}' "$name")
+        if [ "$mem_limit" -eq 0 ]; then
+            mem_status="内存: $mem_usage (无限制)"
+        else
+            mem_status="内存: $mem_usage/$mem_limit"
+        fi
+        echo "$name: $ID | $mem_status"
     done
+}
+
+function check_container_resources() {
+    echo "📊 容器资源监控(持续刷新, Ctrl+C退出)"
+    watch -n 5 "docker stats --no-stream --format \
+        'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}' \
+        \$(docker ps -q --filter 'name=nexus-node')"
 }
 
 function auto_generate_rotation_config() {
@@ -407,7 +492,7 @@ function setup_rotation_schedule() {
         fi
     fi
 
-    # 写入轮换脚本（已修复）
+    # 写入轮换脚本
     cat > /root/nexus-rotate.sh <<'EOS'
 #!/bin/bash
 set -e
@@ -497,18 +582,27 @@ jq -r 'keys[]' "$CONFIG" | while read -r INSTANCE; do
     touch "$LOG_FILE" && chmod 644 "$LOG_FILE"
     
      # 启动新容器（添加内存限制）
-    if docker run -d \
-        --name "$INSTANCE" \
-        --memory 6g \
-        --memory-swap 6g \
-        --oom-kill-disable=false \
-        -e NODE_ID="$NEW_ID" \
-        -e NEXUS_LOG="$LOG_FILE" \
-        -e SCREEN_NAME="${INSTANCE//nexus-node-/nexus-}" \
-        -v "$LOG_FILE":"$LOG_FILE" \
-        -v "$LOG_DIR":"$LOG_DIR" \
-        nexus-node:latest; then
-        log "✅ 容器启动成功 (内存限制: 6GB)"
+    DOCKER_CMD="docker run -d --name $INSTANCE"
+    
+    # 继承原来的内存限制设置
+    original_mem=$(jq -r ".\"$INSTANCE\".mem_limit" "$CONFIG" 2>/dev/null)
+    if [[ -n "$original_mem" && "$original_mem" != "null" ]]; then
+        DOCKER_CMD+=" --memory $original_mem --memory-swap $original_mem --oom-kill-disable=false"
+        log " - 内存限制: $original_mem"
+    else
+        log "⚠️ 未找到内存限制配置，使用默认6g"
+        DOCKER_CMD+=" --memory 6g --memory-swap 6g --oom-kill-disable=false"
+    fi
+    
+    DOCKER_CMD+=" -e NODE_ID='$NEW_ID'"
+    DOCKER_CMD+=" -e NEXUS_LOG='$LOG_FILE'"
+    DOCKER_CMD+=" -e SCREEN_NAME='${INSTANCE//nexus-node-/nexus-}'"
+    DOCKER_CMD+=" -v '$LOG_FILE:$LOG_FILE'"
+    DOCKER_CMD+=" -v '$LOG_DIR:$LOG_DIR'"
+    DOCKER_CMD+=" nexus-node:latest"
+    
+    if eval $DOCKER_CMD; then
+        log "✅ 容器启动成功"
     else
         log "❌ 容器启动失败"
         continue
@@ -561,8 +655,9 @@ function show_menu() {
         echo "7. 添加一个新实例"
         echo "8. 查看指定实例日志"
         echo "9. 部署ID自动轮换系统（每2小时）"
+        echo "10. 监控容器资源使用情况"
         echo "======================================"
-        read -rp "请选择操作 (1-9): " choice
+        read -rp "请选择操作 (1-10): " choice
         
         case "$choice" in
             1) 
@@ -578,7 +673,8 @@ function show_menu() {
             7) add_one_instance ;;
             8) view_logs ;;
             9) setup_rotation_schedule ;;
-            *) echo "无效选项，请输入 1-9" ;;
+            10) check_container_resources ;;
+            *) echo "无效选项，请输入 1-10" ;;
         esac
         
         read -n 1 -s -r -p "按任意键继续..."
