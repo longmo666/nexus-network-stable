@@ -68,7 +68,7 @@ RUN apt-get update && apt-get install -y \\
     logrotate \\
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -sSL https://cli.nexus.xyz/ | bash -s -- v0.8.3 && \\
+RUN curl -sSL https://cli.nexus.xyz/ | bash && \\
     cp /root/.nexus/bin/nexus-network /usr/local/bin/nexus-network && \\
     chmod +x /usr/local/bin/nexus-network
 
