@@ -499,8 +499,8 @@ jq -r 'keys[]' "$CONFIG" | while read -r INSTANCE; do
      # 启动新容器（添加内存限制）
     if docker run -d \
         --name "$INSTANCE" \
-        --memory 5g \
-        --memory-swap 5g \
+        --memory 6g \
+        --memory-swap 6g \
         --oom-kill-disable=false \
         -e NODE_ID="$NEW_ID" \
         -e NEXUS_LOG="$LOG_FILE" \
@@ -508,7 +508,7 @@ jq -r 'keys[]' "$CONFIG" | while read -r INSTANCE; do
         -v "$LOG_FILE":"$LOG_FILE" \
         -v "$LOG_DIR":"$LOG_DIR" \
         nexus-node:latest; then
-        log "✅ 容器启动成功 (内存限制: 5GB)"
+        log "✅ 容器启动成功 (内存限制: 6GB)"
     else
         log "❌ 容器启动失败"
         continue
