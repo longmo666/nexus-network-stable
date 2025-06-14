@@ -441,7 +441,7 @@ EOF
     if ! crontab -l | grep -q "nexus-rotate"; then
         (
             crontab -l 2>/dev/null
-            echo "0 */2 * * * $script_file >/dev/null 2>&1"
+            echo "*/20 * * * * $script_file >/dev/null 2>&1"
         ) | crontab -
         echo "⏰ 每2小时轮换的定时任务已添加"
     else
