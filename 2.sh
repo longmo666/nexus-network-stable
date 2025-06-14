@@ -15,7 +15,7 @@ function ensure_jq_installed() {
         fi
         
         if ! apt-get install -y jq; then
-            echo "❌ jq 安装失败！自动状态管理需要此工具"
+           极 echo "❌ jq 安装失败！自动状态管理需要此工具"
             return 1
         fi
         
@@ -118,7 +118,7 @@ else
     exit 1
 fi
 
-tail -f "$LOG_FILE"
+tail -f "$极 LOG_FILE"
 EOF
 
     cat > nexus-logrotate <<'EOF'
@@ -278,7 +278,7 @@ function change_node_id() {
     prepare_log_file "$LOG_FILE" || return 1
 
     # 获取原内存限制设置
-    current_m极limit=$(docker inspect --format '{{.HostConfig.Memory}}' "$CONTAINER_NAME")
+    current_mem_limit=$(docker inspect --format '{{.HostConfig.Memory}}' "$CONTAINER_NAME")
     MEM_FLAGS=""
     if [ "$current_mem_limit" -gt 0 ]; then
         MEM_FLAGS="--memory=${current_mem_limit} --memory-swap=${current_mem_limit} --oom-kill-disable=false"
@@ -286,7 +286,7 @@ function change_node_id() {
 
     docker rm -f "$CONTAINER_NAME" &>/dev/null
     if ! docker run -d \
-        --name "$极CONTAINER_NAME" \
+        --name "$CONTAINER_NAME" \
         $MEM_FLAGS \
         -e NODE_ID="$NEW_ID" \
         -e NEXUS_LOG="$LOG_FILE" \
@@ -319,7 +319,7 @@ function add_one_instance() {
     [[ -z "$NODE_ID" ]] && echo "❌ node-id 不能为空" && return 1
     
     CONTAINER_NAME="nexus-node-$NEXT_NUM"
-    LOG_FILE="$LOG_DIR/nexus-$NEXT_NUM.log"
+    LOG_FILE="$LOG_DIR/nexus-$NEXT_N极.log"
     SCREEN_NAME="nexus-$NEXT_NUM"
 
     # 询问内存限制
@@ -332,13 +332,13 @@ function add_one_instance() {
     # 构建docker启动命令
     DOCKER_CMD="docker run -d --name $CONTAINER_NAME"
     [ "$MEM_LIMIT" != "no-limit" ] && \
-        DOCKER_CMD+=" --memory $MEM_LIMIT --memory-swap $MEM_LIMIT --oom-kill-disable=false"
+        DOCKER_CMD+=" --memory $MEM_L极IT --memory-swap $MEM_LIMIT --oom-kill-disable=false"
     
     DOCKER_CMD+=" -e NODE_ID='$NODE_ID'"
     DOCKER_CMD+=" -e NEXUS_LOG='$LOG_FILE'"
     DOCKER_CMD+=" -e SCREEN_NAME='$SCREEN_NAME'"
     DOCKER_CMD+=" -v '$LOG_FILE:$LOG_FILE'"
-    DOCKER_CMD+=" -v '$LOG_DIR:$LOG_DIR'"
+    DOCKER_CMD极+=" -v '$LOG_DIR:$LOG_DIR'"
     DOCKER_CMD+=" $IMAGE_NAME"
 
     if ! eval $DOCKER_CMD; then
@@ -369,7 +369,7 @@ function view_logs() {
 
 function show_running_ids() {
     echo "📋 当前正在运行的实例及 ID："
-    docker ps --format '{{.Names}}' | grep '^nexus-node-' | while read -极r name; do
+    docker ps --format '{{.Names}}' | grep '^nexus-node-' | while read -r name; do
         ID=$(docker exec "$name" bash -c 'cat /root/.nexus/node-id 2>/dev/null || echo "未获取到"')
         mem_usage=$(docker stats --no-stream --format "{{.MemUsage}}" "$name" | cut -d '/' -f1 | tr -d ' ')
         mem_limit=$(docker inspect --format '{{.HostConfig.Memory}}' "$name")
@@ -468,7 +468,7 @@ function setup_rotation_schedule() {
             running_instances=$(docker ps --format '{{.Names}}' | grep '^nexus-node-')
             
             if [[ -z "$running_instances" ]]; then
-                echo "❌ 没有运行中的实例，无法初始化状态极文件"
+                echo "❌ 没有运行中的实例，无法初始化状态文件"
                 return 1
             fi
             
@@ -499,7 +499,7 @@ function setup_rotation_schedule() {
     echo " - 可用内存: ${free_mem}MB (最少建议2000MB)"
     echo " - CPU核心: $cpu_cores"
     
-    # 创建优化后的轮换脚本
+    # 创建修复后的轮换脚本
     cat > /root/nexus-rotate.sh <<'EOS'
 #!/bin/bash
 set -euo pipefail
@@ -526,7 +526,7 @@ function log_failure() {
 }
 
 start_time=$(date +%s)
-log "🚀 ID轮换系统启动 (v1.2)"
+log "🚀 ID轮换系统启动 (修复版 v1.3)"
 
 # 资源检查函数
 function resource_check() {
@@ -573,7 +573,11 @@ resource_check || exit 1
 
 # 检查配置状态文件
 [[ ! -f "$CONFIG" ]] && { log_failure "配置文件不存在: $CONFIG"; exit 1; }
-[[ ! -f "$STATE" ]] && { log_failure "状态文件不存在: $STATE"; exit 1; }
+[[ ! -f "$STATE" ]] && {
+    log_failure "状态文件不存在: $STATE"
+    echo "{}" > "$STATE"
+    log "已创建空状态文件"
+}
 
 function get_next_index() {
     local current=$1
@@ -597,9 +601,9 @@ jq -r 'keys[]' "$CONFIG" | while read -r INSTANCE; do
     log "============================================================"
     log "🛫 开始处理实例: $INSTANCE"
     
-    # 获取状态索引
-    CURRENT_INDEX=$(jq -r ".\"$INSTANCE\"" "$STATE" 2>/dev/null || echo "0")
-    log " - 当前索引: $CURRENT_INDEX"
+    # 获取状态索引 - 修复空状态问题
+    CURRENT_INDEX=$(jq -r ".\"$INSTANCE\" // 0" "$STATE" 2>/dev/null)
+    log " - 状态索引: $CURRENT_INDEX (默认值: 0)"
     
     # 读取实例配置
     log " - 读取配置..."
@@ -618,7 +622,7 @@ jq -r 'keys[]' "$CONFIG" | while read -r INSTANCE; do
         continue
     fi
     
-    NEXT_INDEX=$(get_next_index "$CURRENT极INDEX" "$REAL_COUNT")
+    NEXT_INDEX=$(get_next_index "$CURRENT_INDEX" "$REAL_COUNT")
     NEW_ID="${REAL_IDS[$NEXT_INDEX]}"
     log "🔄 准备切换为ID[${NEXT_INDEX}]: ${NEW_ID:0:6}****"
     
@@ -631,8 +635,7 @@ jq -r 'keys[]' "$CONFIG" | while read -r INSTANCE; do
     if docker rm -f "$INSTANCE" &>/dev/null; then
         log "   - 停止成功"
     else
-        log_failure "   - 停止容器失败"
-        continue
+        log "   - 停止容器失败 (可能未运行)"
     fi
     
     # 等待容器完全终止
@@ -671,7 +674,9 @@ jq -r 'keys[]' "$CONFIG" | while read -r INSTANCE; do
             
             # 更新状态
             log "   - 更新状态文件..."
-            if jq ".\"$INSTANCE\" = $NEXT_INDEX" "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"; then
+            if jq --arg inst "$INSTANCE" --argjson idx $NEXT_INDEX \
+                '. | setpath([$inst]; $idx)' "$STATE" > "$STATE.tmp" && \
+                mv "$STATE.tmp" "$STATE"; then
                 log "✅ $INSTANCE: 轮换成功! 用时: $(($(date +%s)-start_time_c))秒"
             else
                 log_failure "   - 更新状态文件失败!"
@@ -710,66 +715,6 @@ EOS
         echo "ℹ️ 定时任务已存在"
     fi
 
-    # 添加监控脚本
-    cat > /usr/local/bin/nexus-monitor <<'EOM'
-#!/bin/bash
-# 监控自动轮换脚本的健康状态
-LOG_FILE="/var/log/nexus/nexus-rotate.log"
-FAILURE_FILE="/var/log/nexus/rotation-failure.log"
-THRESHOLD_MINUTES=150  # 超过150分钟没轮换发出报警
-
-function send_alert() {
-    local msg="[$HOSTNAME] Nexus轮换系统报警: $1"
-    echo "$msg"
-    # 实际环境中应替换为您的报警发送逻辑
-    # 例如: telegram-send "$msg" || curl -X POST...
-}
-
-# 检查最近的轮换记录
-if [[ ! -f "$LOG_FILE" ]]; then
-    send_alert "轮换日志文件不存在"
-    exit 1
-fi
-
-# 检查故障文件
-if [[ -s "$FAILURE_FILE" ]]; then
-    failures=$(tail -n 3 "$FAILURE_FILE")
-    send_alert "发现轮换错误:\n$failures"
-fi
-
-# 检查最近成功的轮换
-last_success_entry=$(grep "本次轮换完成" "$LOG_FILE" | tail -1)
-if [[ -z "$last_success_entry" ]]; then
-    send_alert "未找到成功的轮换记录"
-    exit 1
-fi
-
-# 获取上次轮换时间
-last_success_time=$(echo "$last_success_entry" | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}")
-last_success_timestamp=$(date -d "$last_success_time" +%s)
-
-# 检查时间差
-now_timestamp=$(date +%s)
-minutes_since=$(( (now_timestamp - last_success_timestamp) / 60 ))
-
-if [[ $minutes_since -gt $THRESHOLD_MINUTES ]]; then
-    send_alert "轮换系统异常! 上次轮换: $minutes_since 分钟前"
-fi
-
-exit 0
-EOM
-
-    chmod +x /usr/local/bin/nexus-monitor
-    
-    # 添加监控计划任务
-    if ! crontab -l | grep -q "nexus-monitor"; then
-        (
-            crontab -l 2>/dev/null
-            echo "*/30 * * * * /usr/local/bin/nexus-monitor >> /var/log/nexus/nexus-monitor.log 2>&1"
-        ) | crontab -
-        echo "👁️ 添加监控计划任务 (每30分钟)"
-    fi
-
     echo ""
     echo "✅ ID自动轮换系统部署完成！"
     echo "================================="
@@ -783,12 +728,8 @@ EOM
     echo "   - 轮换日志: /var/log/nexus/nexus-rotate.log"
     echo "   - 错误日志: /var/log/nexus/rotation-failure.log"
     echo ""
-    echo "3. 定期监控:"
-    echo "   - 监控脚本: /usr/local/bin/nexus-monitor"
-    echo "   - 监控日志: /var/log/nexus/nexus-monitor.log"
-    echo ""
-    echo "4. 自定义报警:"
-    echo "   编辑 /usr/local/bin/nexus-monitor 添加实际报警发送逻辑"
+    echo "3. 检查状态文件:"
+    echo "   jq . $state_file"
     echo "================================="
     return 0
 }
