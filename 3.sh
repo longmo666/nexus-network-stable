@@ -68,9 +68,9 @@ RUN apt-get update && apt-get install -y \
     logrotate \
     && rm -rf /var/lib/apt/lists/*
 
-# 直接下载指定版本的 nexus-network v0.8.3
-RUN curl -sSL -o /tmp/nexus-network.tar.gz \
-    "https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.3/nexus-network_0.8.3_linux_amd64.tar.gz" \
+# 修正的下载指令 - 使用正确的文件名并添加-L选项
+RUN curl -sSL -L -o /tmp/nexus-network.tar.gz \
+    "https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.3/nexus-network_0.8.3_Linux_x86_64.tar.gz" \
     && tar -xzf /tmp/nexus-network.tar.gz -C /usr/local/bin/ \
     && chmod +x /usr/local/bin/nexus-network \
     && rm /tmp/nexus-network.tar.gz
@@ -410,7 +410,7 @@ function setup_rotation_schedule() {
         fi
     fi
 
-    # 写入轮换脚本（已修复）
+    # 写入轮换脚本
     cat > /root/nexus-rotate.sh <<'EOS'
 #!/bin/bash
 set -e
