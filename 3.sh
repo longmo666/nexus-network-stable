@@ -54,24 +54,26 @@ function prepare_build_files() {
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
 
-    cat > Dockerfile <<EOF
+    cat > Dockerfile <<'EOF'
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \\
-    curl \\
-    screen \\
-    cron \\
-    bash \\
-    jq \\
-    logrotate \\
+RUN apt-get update && apt-get install -y \
+    curl \
+    screen \
+    cron \
+    bash \
+    jq \
+    logrotate \
     && rm -rf /var/lib/apt/lists/*
 
-# 直接从GitHub下载指定版本的可执行文件
-RUN curl -sSLo /usr/local/bin/nexus-network \\
-    "https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.3/nexus-network-linux-x86_64" && \\
-    chmod +x /usr/local/bin/nexus-network
+# 直接下载指定版本的 nexus-network v0.8.3
+RUN curl -sSL -o /tmp/nexus-network.tar.gz \
+    "https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.3/nexus-network_0.8.3_linux_amd64.tar.gz" \
+    && tar -xzf /tmp/nexus-network.tar.gz -C /usr/local/bin/ \
+    && chmod +x /usr/local/bin/nexus-network \
+    && rm /tmp/nexus-network.tar.gz
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
@@ -264,7 +266,7 @@ function add_one_instance() {
         ((NEXT_NUM++))
     done
 
-    read -rp "请输入新实例的 node-id: extremev.org/NEXUS-00-00-00-00-00-00" NODE_ID
+    read -rp "请输入新实例的 node-id: " NODE_ID
     [[ -z "$NODE_ID" ]] && echo "❌ node-id 不能为空" && return 1
     
     CONTAINER_NAME="nexus-node-$NEXT_NUM"
@@ -428,7 +430,7 @@ function log() {
 }
 
 if [[ ! -f "$CONFIG" ]]; then
-    log "❌ 配置文件 $极客版_CONFIG 不存在"
+    log "❌ 配置文件 $CONFIG 不存在"
     exit 1
 fi
 
@@ -445,7 +447,7 @@ if [[ ! -f "$STATE" ]]; then
     
     echo "{" > "$STATE"
     first=true
-    while read -极客版 name; do
+    while read -r name; do
         if [[ "$first" == "true" ]]; then
             first=false
             echo -n "  \"$name\": 0" >> "$STATE"
@@ -575,7 +577,7 @@ function show_menu() {
             6) change_node_id ;;
             7) add_one_instance ;;
             8) view_logs ;;
-            9) setup极客版_rotation_schedule ;;
+            9) setup_rotation_schedule ;;
             *) echo "无效选项，请输入 1-9" ;;
         esac
         
