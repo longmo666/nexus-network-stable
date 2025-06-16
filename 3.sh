@@ -4,7 +4,6 @@ set -e
 IMAGE_NAME="nexus-node:latest"
 BUILD_DIR="/root/nexus-docker"
 LOG_DIR="/var/log/nexus"
-MEMORY_LIMIT="12g"  # 默认内存限制为12GB
 
 function ensure_jq_installed() {
     if ! command -v jq &>/dev/null; then
@@ -163,9 +162,6 @@ function start_instances() {
 
     init_log_dir || return 1
 
-    read -rp "请输入内存限制（默认12g，支持m/g单位）: " mem_limit
-    [[ -n "$mem_limit" ]] && MEMORY_LIMIT="$mem_limit"
-
     for i in $(seq 1 "$INSTANCE_COUNT"); do
         read -rp "请输入第 $i 个实例的 node-id: " NODE_ID
         [[ -z "$NODE_ID" ]] && echo "❌ node-id 不能为空" && continue
@@ -179,8 +175,6 @@ function start_instances() {
         prepare_log_file "$LOG_FILE" || continue
 
         if ! docker run -d \
-            --memory="$MEMORY_LIMIT" \
-            --memory-swap="$MEMORY_LIMIT" \
             --name "$CONTAINER_NAME" \
             -e NODE_ID="$NODE_ID" \
             -e NEXUS_LOG="$LOG_FILE" \
@@ -192,7 +186,7 @@ function start_instances() {
             continue
         fi
 
-        echo "✅ 启动成功：$CONTAINER_NAME (内存限制: $MEMORY_LIMIT)"
+        echo "✅ 启动成功：$CONTAINER_NAME"
         echo "日志文件路径: $LOG_FILE"
     done
 }
@@ -223,8 +217,6 @@ function restart_instance() {
 
     docker rm -f "$CONTAINER_NAME" &>/dev/null
     if ! docker run -d \
-        --memory="$MEMORY_LIMIT" \
-        --memory-swap="$MEMORY_LIMIT" \
         --name "$CONTAINER_NAME" \
         -e NODE_ID="$NODE_ID" \
         -e NEXUS_LOG="$LOG_FILE" \
@@ -252,8 +244,6 @@ function change_node_id() {
 
     docker rm -f "$CONTAINER_NAME" &>/dev/null
     if ! docker run -d \
-        --memory="$MEMORY_LIMIT" \
-        --memory-swap="$MEMORY_LIMIT" \
         --name "$CONTAINER_NAME" \
         -e NODE_ID="$NEW_ID" \
         -e NEXUS_LOG="$LOG_FILE" \
@@ -284,12 +274,7 @@ function add_one_instance() {
     init_log_dir || return 1
     prepare_log_file "$LOG_FILE" || return 1
 
-    read -rp "请输入内存限制（默认12g，支持m/g单位）: " mem_limit
-    [[ -n "$mem_limit" ]] && MEMORY_LIMIT="$mem_limit"
-
     if ! docker run -d \
-        --memory="$MEMORY_LIMIT" \
-        --memory-swap="$MEMORY_LIMIT" \
         --name "$CONTAINER_NAME" \
         -e NODE_ID="$NODE_ID" \
         -e NEXUS_LOG="$LOG_FILE" \
@@ -301,7 +286,7 @@ function add_one_instance() {
         return 1
     fi
 
-    echo "✅ 添加实例成功：$CONTAINER_NAME (内存限制: $MEMORY_LIMIT)"
+    echo "✅ 添加实例成功：$CONTAINER_NAME"
     echo "日志文件路径: $LOG_FILE"
 }
 
@@ -330,10 +315,6 @@ function setup_rotation_schedule() {
     state_file="/root/nexus-id-state.json"
     script_file="/root/nexus-rotate.sh"
     
-    # 内存限制配置
-    read -rp "请输入容器内存限制（默认12g，支持m/g单位）: " mem_limit
-    [[ -n "$mem_limit" ]] && MEMORY_LIMIT="$mem_limit"
-    
     # 检查配置文件是否存在
     if [[ ! -f "$config_file" ]]; then
         echo "❌ 配置文件 $config_file 不存在"
@@ -360,7 +341,6 @@ CONFIG="$config_file"
 STATE="$state_file"
 LOG_DIR="$LOG_DIR"
 ROTATE_LOG="\$LOG_DIR/nexus-rotate.log"
-MEMORY_LIMIT="$MEMORY_LIMIT"
 
 # 确保日志目录存在
 mkdir -p "\$LOG_DIR"
@@ -412,8 +392,6 @@ jq -r 'keys[]' "\$CONFIG" | while read -r INSTANCE; do
     
     # 启动新容器
     if docker run -d \\
-        --memory="\$MEMORY_LIMIT" \\
-        --memory-swap="\$MEMORY_LIMIT" \\
         --name "\$INSTANCE" \\
         -e NODE_ID="\$NEW_ID" \\
         -e NEXUS_LOG="\$LOG_FILE" \\
@@ -421,7 +399,7 @@ jq -r 'keys[]' "\$CONFIG" | while read -r INSTANCE; do
         -v "\$LOG_FILE":"\$LOG_FILE" \\
         -v "\$LOG_DIR":"\$LOG_DIR" \\
         $IMAGE_NAME; then
-        log "✅ 容器启动成功 (内存限制: \$MEMORY_LIMIT)"
+        log "✅ 容器启动成功"
     else
         log "❌ 容器启动失败"
         continue
@@ -456,7 +434,6 @@ EOF
     echo ""
     echo "配置文件: $config_file"
     echo "状态文件: $state_file"
-    echo "内存限制: $MEMORY_LIMIT"
 }
 
 function show_menu() {
