@@ -54,26 +54,24 @@ function prepare_build_files() {
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
 
-    cat > Dockerfile <<'EOF'
+    cat > Dockerfile <<EOF
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
-    curl \
-    screen \
-    cron \
-    bash \
-    jq \
-    logrotate \
+RUN apt-get update && apt-get install -y \\
+    curl \\
+    screen \\
+    cron \\
+    bash \\
+    jq \\
+    logrotate \\
     && rm -rf /var/lib/apt/lists/*
 
-# 修正的下载指令 - 使用正确的文件名并添加-L选项
-RUN curl -sSL -L -o /tmp/nexus-network.tar.gz \
-    "https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.3/nexus-network_0.8.3_Linux_x86_64.tar.gz" \
-    && tar -xzf /tmp/nexus-network.tar.gz -C /usr/local/bin/ \
-    && chmod +x /usr/local/bin/nexus-network \
-    && rm /tmp/nexus-network.tar.gz
+# 直接从GitHub下载指定版本的可执行文件
+RUN curl -sSLo /usr/local/bin/nexus-network \\
+    "https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.3/nexus-network-linux-x86_64" && \\
+    chmod +x /usr/local/bin/nexus-network
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
