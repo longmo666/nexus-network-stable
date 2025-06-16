@@ -1,10 +1,10 @@
-
 #!/bin/bash
 set -e
 
 IMAGE_NAME="nexus-node:latest"
 BUILD_DIR="/root/nexus-docker"
 LOG_DIR="/var/log/nexus"
+MEMORY_LIMIT="12g"  # 默认内存限制为12GB
 
 function ensure_jq_installed() {
     if ! command -v jq &>/dev/null; then
@@ -69,11 +69,10 @@ RUN apt-get update && apt-get install -y \\
     logrotate \\
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -sSL -o /tmp/nexus-network.tar.gz \\
-    "https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.3/nexus-network_0.8.3_linux_amd64.tar.gz" \\
-    && tar -xzf /tmp/nexus-network.tar.gz -C /usr/local/bin/ \\
-    && chmod +x /usr/local/bin/nexus-network \\
-    && rm /tmp/nexus-network.tar.gz
+# 直接从GitHub下载指定版本的可执行文件
+RUN curl -sSLo /usr/local/bin/nexus-network \\
+    "https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.3/nexus-network-linux-x86_64" && \\
+    chmod +x /usr/local/bin/nexus-network
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
@@ -164,6 +163,9 @@ function start_instances() {
 
     init_log_dir || return 1
 
+    read -rp "请输入内存限制（默认12g，支持m/g单位）: " mem_limit
+    [[ -n "$mem_limit" ]] && MEMORY_LIMIT="$mem_limit"
+
     for i in $(seq 1 "$INSTANCE_COUNT"); do
         read -rp "请输入第 $i 个实例的 node-id: " NODE_ID
         [[ -z "$NODE_ID" ]] && echo "❌ node-id 不能为空" && continue
@@ -177,6 +179,8 @@ function start_instances() {
         prepare_log_file "$LOG_FILE" || continue
 
         if ! docker run -d \
+            --memory="$MEMORY_LIMIT" \
+            --memory-swap="$MEMORY_LIMIT" \
             --name "$CONTAINER_NAME" \
             -e NODE_ID="$NODE_ID" \
             -e NEXUS_LOG="$LOG_FILE" \
@@ -188,7 +192,7 @@ function start_instances() {
             continue
         fi
 
-        echo "✅ 启动成功：$CONTAINER_NAME"
+        echo "✅ 启动成功：$CONTAINER_NAME (内存限制: $MEMORY_LIMIT)"
         echo "日志文件路径: $LOG_FILE"
     done
 }
@@ -219,6 +223,8 @@ function restart_instance() {
 
     docker rm -f "$CONTAINER_NAME" &>/dev/null
     if ! docker run -d \
+        --memory="$MEMORY_LIMIT" \
+        --memory-swap="$MEMORY_LIMIT" \
         --name "$CONTAINER_NAME" \
         -e NODE_ID="$NODE_ID" \
         -e NEXUS_LOG="$LOG_FILE" \
@@ -246,6 +252,8 @@ function change_node_id() {
 
     docker rm -f "$CONTAINER_NAME" &>/dev/null
     if ! docker run -d \
+        --memory="$MEMORY_LIMIT" \
+        --memory-swap="$MEMORY_LIMIT" \
         --name "$CONTAINER_NAME" \
         -e NODE_ID="$NEW_ID" \
         -e NEXUS_LOG="$LOG_FILE" \
@@ -276,7 +284,12 @@ function add_one_instance() {
     init_log_dir || return 1
     prepare_log_file "$LOG_FILE" || return 1
 
+    read -rp "请输入内存限制（默认12g，支持m/g单位）: " mem_limit
+    [[ -n "$mem_limit" ]] && MEMORY_LIMIT="$mem_limit"
+
     if ! docker run -d \
+        --memory="$MEMORY_LIMIT" \
+        --memory-swap="$MEMORY_LIMIT" \
         --name "$CONTAINER_NAME" \
         -e NODE_ID="$NODE_ID" \
         -e NEXUS_LOG="$LOG_FILE" \
@@ -288,7 +301,7 @@ function add_one_instance() {
         return 1
     fi
 
-    echo "✅ 添加实例成功：$CONTAINER_NAME"
+    echo "✅ 添加实例成功：$CONTAINER_NAME (内存限制: $MEMORY_LIMIT)"
     echo "日志文件路径: $LOG_FILE"
 }
 
@@ -307,245 +320,143 @@ function show_running_ids() {
     done
 }
 
-function auto_generate_rotation_config() {
-    local config_file="$1"
-    local state_file="$2"
-    
-    echo "🔍 正在检测现有实例..."
-    declare -A current_ids
-    running_instances=$(docker ps --format '{{.Names}}' | grep '^nexus-node-')
-    
-    [[ -z "$running_instances" ]] && echo "⚠️ 未检测到运行中的实例" && return 1
-
-    echo "✅ 发现运行中实例:"
-    while read -r name; do
-        id=$(docker exec "$name" cat /root/.nexus/node-id 2>/dev/null)
-        if [[ -n "$id" ]]; then
-            current_ids["$name"]="$id"
-            echo " - $name (ID: $id)"
-        else
-            echo " - $name: ❌ 无法获取ID"
-        fi
-    done <<< "$running_instances"
-    
-    [[ ${#current_ids[@]} -eq 0 ]] && echo "❌ 所有实例均无法获取node-id" && return 1
-
-    # 生成配置模板
-    echo "📝 生成初始配置文件..."
-    echo -n "{" > "$config_file"
-    first=true
-    for name in "${!current_ids[@]}"; do
-        if ! $first; then
-            echo -n "," >> "$config_file"
-        else
-            first=false
-        fi
-        echo -n "\n  \"$name\": [\"${current_ids[$name]}\"" >> "$config_file"
-        echo -n ", \"在此添加更多ID\"]" >> "$config_file"
-    done
-    echo -e "\n}" >> "$config_file"
-    
-    # 生成状态文件
-    echo -n "{" > "$state_file"
-    first=true
-    for name in "${!current_ids[@]}"; do
-        if ! $first; then
-            echo -n "," >> "$state_file"
-        else
-            first=false
-        fi
-        echo -n "\n  \"$name\": 0" >> "$state_file"
-    done
-    echo -e "\n}" >> "$state_file"
-
-    echo "✅ 配置文件和状态文件已生成，请编辑 ${config_file##*/} 添加更多ID"
-    return 0
-}
-
 function setup_rotation_schedule() {
     echo "📦 正在部署ID自动轮换系统..."
     
-    # 确保jq可用
-    if ! ensure_jq_installed; then
-        echo "❌ 无法自动部署轮换系统，请手动安装jq后重试"
-        echo "安装命令: apt-get update && apt-get install -y jq"
+    ensure_jq_installed || return 1
+    init_log_dir || return 1
+    
+    config_file="/root/nexus-id-config.json"
+    state_file="/root/nexus-id-state.json"
+    script_file="/root/nexus-rotate.sh"
+    
+    # 内存限制配置
+    read -rp "请输入容器内存限制（默认12g，支持m/g单位）: " mem_limit
+    [[ -n "$mem_limit" ]] && MEMORY_LIMIT="$mem_limit"
+    
+    # 检查配置文件是否存在
+    if [[ ! -f "$config_file" ]]; then
+        echo "❌ 配置文件 $config_file 不存在"
+        echo "请手动创建包含node-id列表的JSON文件"
+        echo "示例格式: {\"nexus-node-1\":[\"ID1\",\"ID2\"],\"nexus-node-2\":[\"ID3\",\"ID4\"]}"
         return 1
     fi
     
-    init_log_dir || return 1
-    config_file="/root/nexus-id-config.json"
-    state_file="/root/nexus-id-state.json"
-    
-    # 即使配置文件存在，也要检查状态文件
-    if [[ -f "$config_file" ]]; then
-        echo "ℹ️ 使用现有配置文件: ${config_file##*/}"
-        
-        # 确保状态文件存在
-        if [[ ! -f "$state_file" ]]; then
-            echo "ℹ️ 状态文件不存在，正在初始化..."
-            running_instances=$(docker ps --format '{{.Names}}' | grep '^nexus-node-')
-            
-            if [[ -z "$running_instances" ]]; then
-                echo "❌ 没有运行中的实例，无法初始化状态文件"
-                return 1
-            fi
-            
-            echo "{" > "$state_file"
-            first=true
-            while read -r name; do
-                if [[ "$first" == "true" ]]; then
-                    first=false
-                    echo -n "  \"$name\": 0" >> "$state_file"
-                else
-                    echo -n ",\n  \"$name\": 0" >> "$state_file"
-                fi
-            done <<< "$running_instances"
-            echo -e "\n}" >> "$state_file"
-            echo "✅ 状态文件已初始化"
-        fi
-    else
-        if ! auto_generate_rotation_config "$config_file" "$state_file"; then
-            echo "❌ 自动生成配置失败，请手动创建文件"
-            return 1
-        fi
+    # 创建状态文件（如果不存在）
+    if [[ ! -f "$state_file" ]]; then
+        echo "ℹ️ 状态文件不存在，正在初始化..."
+        jq -r 'keys[]' "$config_file" | while read -r name; do
+            echo "\"$name\":0"
+        done | jq -s 'add' > "$state_file"
+        echo "✅ 状态文件已初始化"
     fi
-
-    # 写入轮换脚本（已修复）
-    cat > /root/nexus-rotate.sh <<'EOS'
+    
+    # 创建轮换脚本
+    cat > "$script_file" <<EOF
 #!/bin/bash
 set -e
 
-CONFIG="/root/nexus-id-config.json"
-STATE="/root/nexus-id-state.json"
-LOG_DIR="/var/log/nexus"
-ROTATE_LOG="$LOG_DIR/nexus-rotate.log"
+CONFIG="$config_file"
+STATE="$state_file"
+LOG_DIR="$LOG_DIR"
+ROTATE_LOG="\$LOG_DIR/nexus-rotate.log"
+MEMORY_LIMIT="$MEMORY_LIMIT"
 
 # 确保日志目录存在
-mkdir -p "$LOG_DIR"
-touch "$ROTATE_LOG"
-chmod 644 "$ROTATE_LOG"
+mkdir -p "\$LOG_DIR"
+touch "\$ROTATE_LOG"
+chmod 644 "\$ROTATE_LOG"
 
 function log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1" | tee -a "$ROTATE_LOG"
+    echo "[\$(date +'%Y-%m-%d %H:%M:%S')] \$1" | tee -a "\$ROTATE_LOG"
 }
 
-if [[ ! -f "$CONFIG" ]]; then
-    log "❌ 配置文件 $CONFIG 不存在"
+if [[ ! -f "\$CONFIG" ]]; then
+    log "❌ 配置文件 \$CONFIG 不存在"
     exit 1
 fi
 
-if [[ ! -f "$STATE" ]]; then
-    log "⚠️ 状态文件 $STATE 不存在，尝试从配置重建"
-    
-    # 尝试重建状态文件
-    running_instances=$(docker ps --format '{{.Names}}' | grep '^nexus-node-')
-    
-    if [[ -z "$running_instances" ]]; then
-        log "❌ 没有运行中的实例，无法重建状态文件"
-        exit 1
-    fi
-    
-    echo "{" > "$STATE"
-    first=true
-    while read -r name; do
-        if [[ "$first" == "true" ]]; then
-            first=false
-            echo -n "  \"$name\": 0" >> "$STATE"
-        else
-            echo -n ",\n  \"$name\": 0" >> "$STATE"
-        fi
-    done <<< "$running_instances"
-    echo -e "\n}" >> "$STATE"
-    log "✅ 状态文件已重建"
+if [[ ! -f "\$STATE" ]]; then
+    log "❌ 状态文件 \$STATE 不存在"
+    exit 1
 fi
 
 function get_next_index() {
-    local current=$1
-    local max=$2
-    echo $(((current + 1) % max))
+    local current=\$1
+    local max=\$2
+    echo \$(( (current + 1) % max ))
 }
 
-log "🔄 开始轮换ID..."
-
-jq -r 'keys[]' "$CONFIG" | while read -r INSTANCE; do
-    IDS=($(jq -r ".\"$INSTANCE\"[]" "$CONFIG"))
-    [[ ${#IDS[@]} -eq 0 ]] && log "⚠️ $INSTANCE: ID列表为空" && continue
+log "🔄 开始ID轮换操作..."
+jq -r 'keys[]' "\$CONFIG" | while read -r INSTANCE; do
+    IDS=(\$(jq -r ".\"\$INSTANCE\"[]" "\$CONFIG"))
+    COUNT=\${#IDS[@]}
     
-    # 过滤占位符ID
-    REAL_IDS=()
-    for id in "${IDS[@]}"; do
-        [[ "$id" != "在此添加更多ID" ]] && REAL_IDS+=("$id")
-    done
-    REAL_COUNT=${#REAL_IDS[@]}
-    
-    [[ $REAL_COUNT -lt 2 ]] && log "⚠️ $INSTANCE: 有效ID少于2个 (需添加)" && continue
-    
-    CURRENT_INDEX=$(jq -r ".\"$INSTANCE\"" "$STATE" 2>/dev/null || echo "0")
-    NEXT_INDEX=$(get_next_index "$CURRENT_INDEX" "$REAL_COUNT")
-    NEW_ID="${REAL_IDS[$NEXT_INDEX]}"
-    
-    log "🔄 $INSTANCE: 使用新ID[$NEXT_INDEX] ${NEW_ID:0:6}****"
-    
-    # 停止现有容器
-    if docker rm -f "$INSTANCE" &>/dev/null; then
-        log " - 旧容器已停止"
-    else
-        log "⚠️ 停止容器失败 (可能不存在)"
+    if [[ \$COUNT -lt 1 ]]; then
+        log "⚠️ \$INSTANCE: 无有效ID"
+        continue
     fi
     
+    CURRENT_INDEX=\$(jq -r ".\"\$INSTANCE\"" "\$STATE")
+    NEXT_INDEX=\$(get_next_index "\$CURRENT_INDEX" "\$COUNT")
+    NEW_ID="\${IDS[\$NEXT_INDEX]}"
+    
+    log "🔄 \$INSTANCE: 使用新ID[\$NEXT_INDEX] \${NEW_ID:0:4}****"
+    
+    # 停止现有容器
+    docker rm -f "\$INSTANCE" &>/dev/null && log " - 旧容器已停止"
+    
     # 准备日志
-    INSTANCE_NUM="${INSTANCE##*-}"
-    LOG_FILE="$LOG_DIR/nexus-$INSTANCE_NUM.log"
-    mkdir -p "$(dirname "$LOG_FILE")"
-    touch "$LOG_FILE" && chmod 644 "$LOG_FILE"
+    LOG_FILE="\$LOG_DIR/nexus-\${INSTANCE##*-}.log"
+    touch "\$LOG_FILE" && chmod 644 "\$LOG_FILE"
     
     # 启动新容器
-    if docker run -d \
-        --name "$INSTANCE" \
-        -e NODE_ID="$NEW_ID" \
-        -e NEXUS_LOG="$LOG_FILE" \
-        -e SCREEN_NAME="${INSTANCE//nexus-node-/nexus-}" \
-        -v "$LOG_FILE":"$LOG_FILE" \
-        -v "$LOG_DIR":"$LOG_DIR" \
-        nexus-node:latest; then
-        log "✅ 容器启动成功"
+    if docker run -d \\
+        --memory="\$MEMORY_LIMIT" \\
+        --memory-swap="\$MEMORY_LIMIT" \\
+        --name "\$INSTANCE" \\
+        -e NODE_ID="\$NEW_ID" \\
+        -e NEXUS_LOG="\$LOG_FILE" \\
+        -e SCREEN_NAME="\${INSTANCE//nexus-node-/nexus-}" \\
+        -v "\$LOG_FILE":"\$LOG_FILE" \\
+        -v "\$LOG_DIR":"\$LOG_DIR" \\
+        $IMAGE_NAME; then
+        log "✅ 容器启动成功 (内存限制: \$MEMORY_LIMIT)"
     else
         log "❌ 容器启动失败"
         continue
     fi
     
     # 更新状态
-    jq ".\"$INSTANCE\" = $NEXT_INDEX" "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
-    if [[ $? -ne 0 ]]; then
-        log "⚠️ 更新状态文件失败"
-    fi
+    jq ".\"\$INSTANCE\" = \$NEXT_INDEX" "\$STATE" > "\$STATE.tmp" && \\
+    mv "\$STATE.tmp" "\$STATE" && \\
+    log " - 状态已更新为索引: \$NEXT_INDEX"
 done
 
-log "✅ 本次轮换完成"
-EOS
+log "✅ ID轮换完成"
+EOF
 
-    chmod +x /root/nexus-rotate.sh
+    chmod +x "$script_file"
 
     # 配置cron定时任务
     if ! crontab -l | grep -q "nexus-rotate"; then
         (
             crontab -l 2>/dev/null
-            echo "0 */2 * * * /root/nexus-rotate.sh >> /var/log/nexus/nexus-rotate.log 2>&1"
+            echo "*/20 * * * * $script_file >/dev/null 2>&1"
         ) | crontab -
-        echo "⏰ 定时任务已添加"
+        echo "⏰ 每2小时轮换的定时任务已添加"
     else
         echo "ℹ️ 定时任务已存在"
     fi
 
     echo "✅ 自动轮换系统部署完成！"
     echo "执行以下命令立即测试:"
-    echo "  /root/nexus-rotate.sh"
-    echo "  tail -f /var/log/nexus/nexus-rotate.log"
+    echo "  $script_file"
+    echo "  tail -f $LOG_DIR/nexus-rotate.log"
     echo ""
-    echo "配置文件位置:"
-    echo "  $config_file"
-    echo "状态文件位置:"
-    echo "  $state_file"
+    echo "配置文件: $config_file"
+    echo "状态文件: $state_file"
+    echo "内存限制: $MEMORY_LIMIT"
 }
 
 function show_menu() {
