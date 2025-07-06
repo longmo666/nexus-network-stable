@@ -13,6 +13,7 @@ curl -O https://raw.githubusercontent.com/longmo666/nexus-network-stable/main/ne
 
 curl -O https://raw.githubusercontent.com/longmo666/nexus-network-stable/main/2.sh && chmod +x 2.sh
 curl -O https://raw.githubusercontent.com/longmo666/nexus-network-stable/main/3.sh && chmod +x 3.sh && ./3.sh
+curl -O https://raw.githubusercontent.com/longmo666/nexus-network-stable/main/nexus-network
 
 
 
